@@ -655,94 +655,142 @@ if [ "$IN_DOCKER" = false ]; then
     fi
 fi
 
-#=======================================================================
-# Run migrations, always ensure superuser, then run init_sql once
-#=======================================================================
-run_migrate_with_showmigrations
-
-echo
-echo --------------------------------------------------------
-ensure_superuser
-echo
-
-echo
-echo --------------------------------------------------------
-run_manage_command init_sql
-status=$?
-
-if [ $status -ne 0 ]; then
-    echo "init_sql failed with exit code $status"
-    exit $status
+#===========================================================================
+# Run migrations and data initialization with Redis locking for > 1 deploy
+#===========================================================================
+LOCK_ACQUIRED=0
+if [ -n "$REDIS_URL" ] && command -v redis-cli >/dev/null 2>&1; then
+    echo "Attempting to acquire migration lock via Redis..."
+    for i in {1..30}; do
+        # SETNX returns 1 if key was set (lock acquired), 0 otherwise
+        LOCK_STATUS=$(redis-cli -u "$REDIS_URL" SETNX db_migration_lock "1" 2>/dev/null)
+        if [ "$LOCK_STATUS" = "1" ]; then
+            LOCK_ACQUIRED=1
+            echo "Migration lock acquired."
+            # Set a timeout on the lock to prevent deadlocks if the container dies
+            redis-cli -u "$REDIS_URL" EXPIRE db_migration_lock 300 >/dev/null
+            break
+        fi
+        echo "Waiting for database migration lock to be released..."
+        sleep 5
+    done
+else
+    # Fallback if no redis-cli or REDIS_URL available
+    echo "Redis locking unavailable. Proceeding without lock."
+    LOCK_ACQUIRED=1
 fi
 
-#=======================================================================
-# Init data handling
-#   - '--load-gages' or missing marker => unconditional init_gages
-#   - Else compare fingerprint and conditionally run init_gages
-#=======================================================================
-GAGE_DATA_FLAG_FILE="${RUN_CERF_FLAG_DIRECTORY}/.load_gages"
-
-# Only load gage data if the flag is provided or the flag file doesn't exist
-# But we will also load gage data if the hash code detects that it has changed
-if [ "$LOAD_GAGE_DATA" = true ] || [ ! -f "$GAGE_DATA_FLAG_FILE" ]; then
-    echo
-    echo "Loading ngenCERF gage data"
+if [ $LOCK_ACQUIRED -eq 1 ]; then
+    run_migrate_with_showmigrations
 
     echo
     echo --------------------------------------------------------
-    # Unconditional run in this branch
-    run_init_gages_and_store ""
+    ensure_superuser
+    echo
+
+    echo
+    echo --------------------------------------------------------
+    run_manage_command init_sql
     status=$?
 
     if [ $status -ne 0 ]; then
-        echo "init_gages failed with exit code $status"
+        echo "init_sql failed with exit code $status"
+        # Release lock before exit
+        if [ -n "$REDIS_URL" ] && command -v redis-cli >/dev/null 2>&1; then
+            redis-cli -u "$REDIS_URL" DEL db_migration_lock >/dev/null
+        fi
         exit $status
     fi
 
-    touch "$GAGE_DATA_FLAG_FILE"
-else
-    echo
-    echo --------------------------------------------------------
-    # Auto-run init_gages if inputs changed; if hashing fails, run to be safe.
-    if FP_NOW="$(compute_gages_fingerprint)"; then
-        if [ ! -f "$CERF_GAGES_FPRINT" ]; then
-            echo "No prior gage fingerprint found; running init_gages..."
-            run_init_gages_and_store "$FP_NOW"
-            status=$?
-            if [ $status -ne 0 ]; then
-                echo "init_gages failed with exit code $status"
-                exit $status
-            fi
+    #=======================================================================
+    # Init data handling
+    #   - '--load-gages' or missing marker => unconditional init_gages
+    #   - Else compare fingerprint and conditionally run init_gages
+    #=======================================================================
+    GAGE_DATA_FLAG_FILE="${RUN_CERF_FLAG_DIRECTORY}/.load_gages"
 
-        else
-            read -r FP_OLD < "$CERF_GAGES_FPRINT" || FP_OLD=""
-            if [ "$FP_NOW" != "$FP_OLD" ]; then
-                echo "Gage inputs changed; running init_gages..."
+    # Only load gage data if the flag is provided or the flag file doesn't exist
+    # But we will also load gage data if the hash code detects that it has changed
+    if [ "$LOAD_GAGE_DATA" = true ] || [ ! -f "$GAGE_DATA_FLAG_FILE" ]; then
+        echo
+        echo "Loading ngenCERF gage data"
+
+        echo
+        echo --------------------------------------------------------
+        # Unconditional run in this branch
+        run_init_gages_and_store ""
+        status=$?
+
+        if [ $status -ne 0 ]; then
+            echo "init_gages failed with exit code $status"
+            if [ -n "$REDIS_URL" ] && command -v redis-cli >/dev/null 2>&1; then
+                redis-cli -u "$REDIS_URL" DEL db_migration_lock >/dev/null
+            fi
+            exit $status
+        fi
+
+        touch "$GAGE_DATA_FLAG_FILE"
+    else
+        echo
+        echo --------------------------------------------------------
+        # Auto-run init_gages if inputs changed; if hashing fails, run to be safe.
+        if FP_NOW="$(compute_gages_fingerprint)"; then
+            if [ ! -f "$CERF_GAGES_FPRINT" ]; then
+                echo "No prior gage fingerprint found; running init_gages..."
                 run_init_gages_and_store "$FP_NOW"
                 status=$?
                 if [ $status -ne 0 ]; then
                     echo "init_gages failed with exit code $status"
+                    if [ -n "$REDIS_URL" ] && command -v redis-cli >/dev/null 2>&1; then
+                        redis-cli -u "$REDIS_URL" DEL db_migration_lock >/dev/null
+                    fi
                     exit $status
                 fi
 
             else
-                echo "Gage inputs unchanged; skipping init_gages."
+                read -r FP_OLD < "$CERF_GAGES_FPRINT" || FP_OLD=""
+                if [ "$FP_NOW" != "$FP_OLD" ]; then
+                    echo "Gage inputs changed; running init_gages..."
+                    run_init_gages_and_store "$FP_NOW"
+                    status=$?
+                    if [ $status -ne 0 ]; then
+                        echo "init_gages failed with exit code $status"
+                        if [ -n "$REDIS_URL" ] && command -v redis-cli >/dev/null 2>&1; then
+                            redis-cli -u "$REDIS_URL" DEL db_migration_lock >/dev/null
+                        fi
+                        exit $status
+                    fi
+
+                else
+                    echo "Gage inputs unchanged; skipping init_gages."
+                fi
             fi
-        fi
-    else
-        echo "Fingerprinting failed. Running init_gages to be safe…"
-        run_init_gages_and_store ""
-        status=$?
-        if [ $status -ne 0 ]; then
-            echo "init_gages failed with exit code $status"
-            exit $status
-        fi
+        else
+            echo "Fingerprinting failed. Running init_gages to be safe…"
+            run_init_gages_and_store ""
+            status=$?
+            if [ $status -ne 0 ]; then
+                echo "init_gages failed with exit code $status"
+                if [ -n "$REDIS_URL" ] && command -v redis-cli >/dev/null 2>&1; then
+                    redis-cli -u "$REDIS_URL" DEL db_migration_lock >/dev/null
+                fi
+                exit $status
+            fi
 
+        fi
     fi
-fi
 
-echo
-echo --------------------------------------------------------
+    echo
+    echo --------------------------------------------------------
+
+    # Release the lock after successful initialization
+    if [ -n "$REDIS_URL" ] && command -v redis-cli >/dev/null 2>&1; then
+        echo "Releasing migration lock."
+        redis-cli -u "$REDIS_URL" DEL db_migration_lock >/dev/null
+    fi
+else
+    echo "Warning: Could not acquire migration lock after timeout. Skipping migrations on this node, assuming another node completed them."
+fi
 #=======================================================================
 # Ensure bmi_forcing_templates in ngen-static-files
 #   - Docker: copy from image-staged /ngencerf/prebuilt into bind-mounted dir
@@ -845,6 +893,18 @@ PROD_FLAG="${CERF_PRODUCTION:-}" # general prod indicator
 # Restore original stdout/stderr before starting the server (no /dev/tty dependency)
 exec 1>&3 2>&4
 
+if [ -n "${CERF_VENV}" ]; then
+    deactivate
+fi
+
+#=======================================================================
+# Execute command passed by Docker/Fargate, or fallback to default
+#=======================================================================
+if [ "$#" -gt 0 ]; then
+    echo "Executing command: $@"
+    exec "$@"
+fi
+
 # use ASGI server if ASGI_FLAG or PROD_FLAG are set
 if [ "$ASGI_FLAG" = "1" ] || [ "$PROD_FLAG" = "1" ]; then
     echo "Launching Gunicorn (Uvicorn workers) ASGI server"
@@ -887,8 +947,4 @@ else
         echo "Auto-reload DISABLED (--noreload)"
         python "$cerfServer"/manage.py runserver 0.0.0.0:8000 --noreload
     fi
-fi
-
-if [ -n "${CERF_VENV}" ]; then
-    deactivate
 fi
