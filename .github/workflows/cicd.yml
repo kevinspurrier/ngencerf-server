@@ -27,8 +27,8 @@ on:
         description: 'NGEN_REF'
         required: false
         type: string
-      MSWM_ORG:
-        description: 'MSWM_ORG'
+      MSW_MGR_ORG:
+        description: 'MSW_MGR_ORG'
         required: false
         type: string
       MSW_MGR_REF:
@@ -68,6 +68,7 @@ permissions:
 env:
   REGISTRY: ghcr.io
   PYTHON_VERSION: '3.11'
+  BASE_NAME: rockylinux:8
 
 jobs:
   # set variables to use in other jobs
@@ -82,8 +83,15 @@ jobs:
       commit_sha_short: ${{ steps.vars.outputs.commit_sha_short }}
       test_image_tag: ${{ steps.vars.outputs.test_image_tag }}
       alias_tag: ${{ steps.vars.outputs.alias_tag }}
-      build_date: ${{ steps.vars.outputs.build_date }}
       clean_ref: ${{ steps.vars.outputs.clean_ref }}
+      base_name: ${{ steps.vars.outputs.base_name }}
+      base_digest: ${{ steps.vars.outputs.base_digest }}
+      base_revision: ${{ steps.vars.outputs.base_revision }}
+      data_assimilation_revision: ${{ steps.vars.outputs.data_assimilation_revision }}
+      ewts_revision: ${{ steps.vars.outputs.ewts_revision }}
+      msw_mgr_revision: ${{ steps.vars.outputs.msw_mgr_revision }}
+      ngen_revision: ${{ steps.vars.outputs.ngen_revision }}
+      ngen_forcing_revision: ${{ steps.vars.outputs.ngen_forcing_revision }}
     steps:
       - name: Compute image vars
         id: vars
@@ -96,14 +104,8 @@ jobs:
           REPO="$(basename "${GITHUB_REPOSITORY}")"
           IMAGE_BASE="${REGISTRY}/${ORG}/${REPO}"
 
-          # one datetime for all time variables
-          NOW=$(date -u +'%Y-%m-%d %H:%M:%S')
-
-          # for OCI labels
-          BUILD_DATE=$(date -u -d "$NOW" +'%Y-%m-%dT%H:%M:%SZ')
-
           # for Docker image tags
-          TIMESTAMP=$(date -u -d "$NOW" +'%Y%m%d%H%M%SZ')
+          TIMESTAMP=$(date -u +'%Y%m%d%H%M%SZ')
 
           # logic to get the real branch name and commit SHA on pull requests
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
@@ -117,6 +119,35 @@ jobs:
           # clean ref name and short commit sha
           CLEAN_REF=$(echo "$REAL_REF" | tr '[:upper:]' '[:lower:]' | sed 's/\//-/g')
           SHORT_SHA="${REAL_SHA:0:7}"
+
+          # skopeo is needed to inspect the base image
+          if ! command -v skopeo >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y --no-install-recommends skopeo
+          fi
+
+          # base image metadata for Dockerfile labels
+          BASE_INSPECT=$(skopeo inspect --override-os linux --override-arch amd64 "docker://${BASE_NAME}")
+          BASE_DIGEST=$(echo "$BASE_INSPECT" | jq -r '.Digest // "unknown"')
+          BASE_REVISION=$(echo "$BASE_INSPECT" | jq -r '.Labels["org.opencontainers.image.revision"] // .Labels["io.ngwpc.image.base.revision"] // "unknown"')
+
+          # resolve each source repo's ref (branch/tag/SHA) to its commit SHA for revision labels
+          resolve_sha() {
+            local url="$1" ref="$2" out sha
+            # a full 40-char SHA can't be looked up via ls-remote; use it directly
+            if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then echo "$ref"; return; fi
+            out=$(git ls-remote "$url" "$ref" "refs/tags/${ref}^{}" 2>/dev/null)
+            # prefer the dereferenced commit (^{}) for annotated tags; else first match
+            sha=$(echo "$out" | grep '\^{}$' | head -n1 | cut -f1)
+            [ -z "$sha" ] && sha=$(echo "$out" | head -n1 | cut -f1)
+            echo "${sha:-unknown}"
+          }
+
+          DATA_ASSIMILATION_REVISION=$(resolve_sha "https://github.com/${{ inputs.DATA_ASSIMILATION_ORG || 'NGWPC' }}/nwm-data-assimilation.git" "${{ inputs.DATA_ASSIMILATION_REF || 'development' }}")
+          EWTS_REVISION=$(resolve_sha "https://github.com/${{ inputs.EWTS_ORG || 'NGWPC' }}/nwm-ewts.git" "${{ inputs.EWTS_REF || 'development' }}")
+          MSW_MGR_REVISION=$(resolve_sha "https://github.com/${{ inputs.MSW_MGR_ORG || 'NGWPC' }}/nwm-msw-mgr.git" "${{ inputs.MSW_MGR_REF || 'development' }}")
+          NGEN_REVISION=$(resolve_sha "https://github.com/${{ inputs.NGEN_ORG || 'NGWPC' }}/ngen.git" "${{ inputs.NGEN_REF || 'development' }}")
+          NGEN_FORCING_REVISION=$(resolve_sha "https://github.com/${{ inputs.NGEN_FORCING_ORG || 'NGWPC' }}/ngen-forcing.git" "${{ inputs.NGEN_FORCING_REF || 'development' }}")
 
           # logic for the tags:
           # test_image_tag (commit short sha): used for the initial build and test
@@ -137,14 +168,23 @@ jobs:
           fi
 
           # save outputs
-          echo "org=${ORG}" >> "$GITHUB_OUTPUT"
-          echo "image_base=${IMAGE_BASE}" >> "$GITHUB_OUTPUT"
-          echo "build_date=${BUILD_DATE}" >> "$GITHUB_OUTPUT"
-          echo "test_image_tag=${TEST_TAG}" >> "$GITHUB_OUTPUT"
-          echo "alias_tag=${ALIAS}" >> "$GITHUB_OUTPUT"
-          echo "commit_sha=${REAL_SHA}" >> "$GITHUB_OUTPUT"
-          echo "commit_sha_short=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-          echo "clean_ref=${CLEAN_REF}" >> "$GITHUB_OUTPUT"
+          cat >> "$GITHUB_OUTPUT" <<EOF
+          org=${ORG}
+          image_base=${IMAGE_BASE}
+          test_image_tag=${TEST_TAG}
+          alias_tag=${ALIAS}
+          commit_sha=${REAL_SHA}
+          commit_sha_short=${SHORT_SHA}
+          clean_ref=${CLEAN_REF}
+          base_name=${BASE_NAME}
+          base_digest=${BASE_DIGEST}
+          base_revision=${BASE_REVISION}
+          data_assimilation_revision=${DATA_ASSIMILATION_REVISION}
+          ewts_revision=${EWTS_REVISION}
+          msw_mgr_revision=${MSW_MGR_REVISION}
+          ngen_revision=${NGEN_REVISION}
+          ngen_forcing_revision=${NGEN_FORCING_REVISION}
+          EOF
 
   # CodeQL scan
   codeql-scan:
@@ -196,13 +236,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Log in to registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build & push (${{ matrix.dockerfile }}) image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.dockerfile }}
@@ -211,19 +251,26 @@ jobs:
           build-args: |
             NGEN_ORG=${{ inputs.NGEN_ORG || 'NGWPC' }}
             NGEN_REF=${{ inputs.NGEN_REF || 'development' }}
-            MSWM_ORG=${{ inputs.MSWM_ORG || 'NGWPC' }}
-            MSWM_REF=${{ inputs.MSWM_REF || 'development' }}
+            NGEN_REVISION=${{ needs.setup.outputs.ngen_revision }}
+            MSW_MGR_ORG=${{ inputs.MSW_MGR_ORG || 'NGWPC' }}
+            MSW_MGR_REF=${{ inputs.MSW_MGR_REF || 'development' }}
+            MSW_MGR_REVISION=${{ needs.setup.outputs.msw_mgr_revision }}
             DATA_ASSIMILATION_ORG=${{ inputs.DATA_ASSIMILATION_ORG || 'NGWPC' }}
             DATA_ASSIMILATION_REF=${{ inputs.DATA_ASSIMILATION_REF || 'development' }}
+            DATA_ASSIMILATION_REVISION=${{ needs.setup.outputs.data_assimilation_revision }}
             NGEN_FORCING_ORG=${{ inputs.NGEN_FORCING_ORG || 'NGWPC' }}
             NGEN_FORCING_REF=${{ inputs.NGEN_FORCING_REF || 'development' }}
+            NGEN_FORCING_REVISION=${{ needs.setup.outputs.ngen_forcing_revision }}
             EWTS_ORG=${{ inputs.EWTS_ORG || 'NGWPC' }}
             EWTS_REF=${{ inputs.EWTS_REF || 'development' }}
+            EWTS_REVISION=${{ needs.setup.outputs.ewts_revision }}
+            BASE_NAME=${{ needs.setup.outputs.base_name }}
+            BASE_DIGEST=${{ needs.setup.outputs.base_digest }}
+            BASE_REVISION=${{ needs.setup.outputs.base_revision }}
             IMAGE_SOURCE=https://github.com/${{ github.repository }}
             IMAGE_VENDOR=${{ github.repository_owner }}
             IMAGE_VERSION=${{ needs.setup.outputs.clean_ref }}
             IMAGE_REVISION=${{ needs.setup.outputs.commit_sha }}
-            IMAGE_CREATED=${{ needs.setup.outputs.build_date }}
 
 # run unit tests inside the Docker images
   unit-test:
