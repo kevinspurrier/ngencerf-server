@@ -893,7 +893,7 @@ PROD_FLAG="${CERF_PRODUCTION:-}" # general prod indicator
 # Restore original stdout/stderr before starting the server (no /dev/tty dependency)
 exec 1>&3 2>&4
 
-if [ -n "${CERF_VENV}" ]; then
+if [ -n "${CERF_VENV}" ] && [ "$IN_DOCKER" = false ]; then
     deactivate
 fi
 
