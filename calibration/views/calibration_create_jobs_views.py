@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timezone, timedelta
 
 from django.db import transaction
-from drf_spectacular.utils import extend_schema, OpenApiResponse
+from drf_spectacular.utils import extend_schema, OpenApiResponse, PolymorphicProxySerializer
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
@@ -325,12 +325,14 @@ def create_and_run_forecast(request: Request) -> Response:
     request=CreateHindcastRequestSerializer,
     responses={
         201: OpenApiResponse(
-            response={
-                "oneOf": [
+            response=PolymorphicProxySerializer(
+                component_name='CreateHindcastResponse',
+                serializers=[
                     CreateAndRunHindcastResponseSerializer,
                     CreateAndValidateHindcastResponseSerializer,
-                ]
-            },
+                ],
+                resource_type_field_name='type'
+            ),
             description="Created and submitted hindcast, or validation-only response"
         ),
         400: OpenApiResponse(
