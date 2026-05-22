@@ -204,6 +204,13 @@ def execute_job(run: BaseRun, cmd_line_args: dict[str, str], stdout_file: str, s
         except AttributeError as e:
             raise CerfException(f"Error retrieving owner for run {run.id}: {str(e)}")
         submit_job_to_slurm(run, owner, cmd_line_args, stdout_file)
+    elif settings.NGEN_ENVIRONMENT == NgenEnvironmentEnum.AWS_PCS:
+        from calibration.run_util.run_ngen_cal_aws_pcs import submit_job_to_slurm
+        try:
+            owner = get_run_owner(run)
+        except AttributeError as e:
+            raise CerfException(f"Error retrieving owner for run {run.id}: {str(e)}")
+        submit_job_to_slurm(run, owner, cmd_line_args, stdout_file)
     else:
         raise CerfException(f"Unsupported environment: {settings.NGEN_ENVIRONMENT}")
 
@@ -225,6 +232,9 @@ def cancel_job_common(run: BaseRun) -> bool:
         return cancel_local_job(run)
     elif settings.NGEN_ENVIRONMENT == NgenEnvironmentEnum.PARALLEL_WORKS:
         from calibration.run_util.run_ngen_cal_pw import cancel_slurm_job
+        return cancel_slurm_job(run)
+    elif settings.NGEN_ENVIRONMENT == NgenEnvironmentEnum.AWS_PCS:
+        from calibration.run_util.run_ngen_cal_aws_pcs import cancel_slurm_job
         return cancel_slurm_job(run)
     else:
         logger.error(f"Unsupported environment: {settings.NGEN_ENVIRONMENT}")
