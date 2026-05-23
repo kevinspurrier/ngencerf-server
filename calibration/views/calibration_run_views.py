@@ -1852,7 +1852,13 @@ def generate_slurm_jwt() -> str:
         "iat": int(time.time()),
         "sun": "ec2-user",
         "uid": 1000,
-        "gids": [1000]
+        "gid": 1000,
+        "id": {
+            "gecos": "EC2 User",
+            "dir": "/home/ec2-user",
+            "gids": [1000],
+            "shell": "/bin/bash"
+        }
     }
     
     return jwt.encode(payload, secret, algorithm="HS256")
