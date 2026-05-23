@@ -11,7 +11,8 @@ from django.forms import model_to_dict
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiExample
 from rest_framework import status
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
 from rest_framework.request import Request
 from rest_framework.response import Response
 
@@ -1851,13 +1852,7 @@ def generate_slurm_jwt() -> str:
         "iat": int(time.time()),
         "sun": "ec2-user",
         "uid": 1000,
-        "gid": 1000,
-        "id": {
-            "gecos": "EC2 User",
-            "dir": "/home/ec2-user",
-            "gids": [1000],
-            "shell": "/bin/bash"
-        }
+        "gids": [1000]
     }
     
     return jwt.encode(payload, secret, algorithm="HS256")
@@ -1887,7 +1882,7 @@ def submit_poc_job(request: Request) -> Response:
 
     url = f"{settings.SLURM_URL.rstrip('/')}/{settings.SLURM_OPENAPI_SUBMIT_ENDPOINT.lstrip('/')}"
     headers = {
-        "X-SLURM-USER-TOKEN": token,
+        "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
     }
 
