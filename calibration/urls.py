@@ -191,5 +191,6 @@ urlpatterns = [
     path('calibration/get_slurm_token/', calibration_run_views.get_slurm_token, name="getSlurmToken"),
     path('calibration/process_calibration_output/', calibration_run_views.process_calibration_output, name="processCalibrationOutput"),
     path('calibration/process_swe_timeseries/', calibration_run_views.process_swe_timeseries, name="processSweTimeseries"),
+    path('calibration/submit_poc_job/', calibration_run_views.submit_poc_job, name="submitPocJob"),
 
 ]

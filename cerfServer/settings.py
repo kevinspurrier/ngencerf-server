@@ -383,6 +383,11 @@ except KeyError:
 # -----------------------------
 
 SLURM_URL = os.getenv("SLURM_URL")
+SLURM_JWT_SECRET = os.getenv("SLURM_JWT_SECRET")
+# Native Slurm REST API Endpoints (v0.0.43 for Slurm 25.05+)
+SLURM_OPENAPI_SUBMIT_ENDPOINT = 'slurm/v0.0.43/job/submit'
+
+# Legacy Wrapper API Endpoints
 SLURM_SUBMIT_CALIBRATION_JOB_ENDPOINT = 'submit-calibration-job'
 SLURM_SUBMIT_VALIDATION_JOB_ENDPOINT = 'submit-validation-job'
 SLURM_SUBMIT_COLD_START_JOB_ENDPOINT = 'submit-cold-start-job'

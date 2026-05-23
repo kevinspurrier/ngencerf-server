@@ -1,5 +1,7 @@
 import json
 import logging
+import time
+import jwt
 from datetime import datetime, timezone
 
 import requests
@@ -1831,3 +1833,84 @@ def get_slurm_status(slurm_id: int) -> tuple[bool, str | None]:
         logger.exception(f"Error querying Slurm status for job {slurm_id}: {ex}")
         # Safest assumption: job is gone, status indeterminate
         return False, "UNKNOWN"
+
+def generate_slurm_jwt() -> str:
+    """
+    Generates a short-lived JSON Web Token (JWT) using the symmetric 
+    HS256 secret configured for the AWS PCS Slurm REST API.
+    """
+    secret = getattr(settings, 'SLURM_JWT_SECRET', None)
+    if not secret:
+        raise ValueError("SLURM_JWT_SECRET is not configured in settings")
+
+    # The token is valid for 10 minutes
+    expiration_time = int(time.time() + 600)
+
+    payload = {
+        "exp": expiration_time,
+        "iat": int(time.time()),
+        "sun": "ec2-user",
+        "uid": 1000,
+        "gid": 1000,
+        "id": {
+            "gecos": "EC2 User",
+            "dir": "/home/ec2-user",
+            "gids": [1000],
+            "shell": "/bin/bash"
+        }
+    }
+    
+    return jwt.encode(payload, secret, algorithm="HS256")
+
+@extend_schema(
+    request=EmptySerializer,
+    responses={
+        200: OpenApiResponse(description="PoC Job Submitted Successfully"),
+        500: OpenApiResponse(response=ErrorResponseSerializer, description="Internal Server Error")
+    },
+    description="Submits a proof of concept job to the native Slurm REST API"
+)
+@api_view(['POST'])
+@handle_exceptions
+def submit_poc_job(request: Request) -> Response:
+    """
+    Proof of concept endpoint to validate direct integration with the AWS PCS managed slurmrestd endpoint.
+    """
+    if getattr(settings, 'NGEN_ENVIRONMENT', '') != 'AWS_PCS':
+        return ResponseError("Native Slurm submission is only enabled in AWS_PCS environments.")
+
+    try:
+        token = generate_slurm_jwt()
+    except Exception as e:
+        logger.error(f"Failed to generate Slurm JWT: {e}")
+        return ResponseError(f"JWT Generation Error: {str(e)}")
+
+    url = f"{settings.SLURM_URL.rstrip('/')}/{settings.SLURM_OPENAPI_SUBMIT_ENDPOINT.lstrip('/')}"
+    headers = {
+        "X-SLURM-USER-TOKEN": token,
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "job": {
+            "name": "poc-job",
+            "partition": "compute-opt",
+            "nodes": 1,
+            "tasks": 1,
+            "script": "#!/bin/bash\necho 'Hello from Slurm REST API Native Integration!'\nsleep 30",
+            "environment": ["PATH=/usr/local/bin:/usr/bin:/bin"]
+        }
+    }
+
+    logger.info(f"Submitting PoC job to {url}")
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        logger.info(f"PoC job submitted successfully: {data}")
+        return Response({"message": "Job submitted", "slurm_response": data})
+    except Exception as ex:
+        logger.error(f"Slurm API error: {ex}")
+        if hasattr(ex, 'response') and ex.response is not None:
+            logger.error(f"Slurm Response: {ex.response.text}")
+        return ResponseError(f"Slurm API Error: {str(ex)}")
