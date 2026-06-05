@@ -1863,7 +1863,7 @@ def submit_poc_job(request: Request) -> Response:
 
     url = f"{settings.SLURM_URL.rstrip('/')}/{settings.SLURM_OPENAPI_SUBMIT_ENDPOINT.lstrip('/')}"
     headers = {
-        "X-SLURM-USER-NAME": "ec2-user",
+        "X-SLURM-USER-NAME": getattr(settings, 'SLURM_REST_USER', 'ec2-user'),
         "X-SLURM-USER-TOKEN": token,
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"

@@ -117,7 +117,7 @@ def cancel_slurm_job(run: BaseRun) -> bool:
     
     headers = {
         "Content-Type": "application/json",
-        "X-SLURM-USER-NAME": getattr(settings, 'SLURM_REST_USER', 'root'),
+        "X-SLURM-USER-NAME": getattr(settings, 'SLURM_REST_USER', 'ec2-user'),
         "X-SLURM-USER-TOKEN": generate_slurm_jwt()
     }
     

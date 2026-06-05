@@ -4,9 +4,6 @@ import base64
 import jwt
 import boto3
 import requests
-from requests.auth import AuthBase
-from botocore.auth import SigV4Auth
-from botocore.awsrequest import AWSRequest
 from django.conf import settings
 
 # Global cache for the secret so we don't hit Secrets Manager on every API call
@@ -52,38 +49,12 @@ def get_slurm_jwt_secret() -> str | bytes:
 
     return _SLURM_JWT_SECRET
 
-class Boto3SigV4Auth(AuthBase):
-    """
-    A custom authentication class for `requests` that signs HTTP requests
-    using AWS Signature Version 4. This is required when communicating with
-    the AWS PCS Slurm REST API endpoints.
-    """
-    def __init__(self):
-        self.session = boto3.Session()
-        self.credentials = self.session.get_credentials()
-        self.region_name = self.session.region_name or 'us-east-1'
-        self.service_name = 'execute-api' # AWS PCS VPC endpoints use API Gateway
-
-    def __call__(self, r):
-        # We must sign the exact request that `requests` is about to send
-        request = AWSRequest(method=r.method, url=r.url, data=r.body, headers=dict(r.headers))
-        SigV4Auth(self.credentials, self.service_name, self.region_name).add_auth(request)
-        
-        # Apply the generated signature headers back to the original request
-        r.headers.update(dict(request.headers))
-        return r
-
 def get_slurm_session() -> requests.Session:
     """
-    Returns a configured requests Session object for communicating with Slurm.
-    If the environment is AWS PCS, it attaches the AWS SigV4 authentication handler.
+    Returns a standard requests Session object.
+    AWS PCS Slurm REST API uses JWT, not SigV4.
     """
-    session = requests.Session()
-    
-    if getattr(settings, 'NGEN_ENVIRONMENT', '') == 'AWS_PCS':
-        session.auth = Boto3SigV4Auth()
-        
-    return session
+    return requests.Session()
 
 def generate_slurm_jwt() -> str:
     """
@@ -95,17 +66,20 @@ def generate_slurm_jwt() -> str:
     # The token is valid for 10 minutes
     expiration_time = int(time.time() + 600)
 
-    # AWS PCS slurmrestd expects the 'root' user unless explicitly configured otherwise
+    # AWS PCS uses ec2-user (uid 1000) by default for Amazon Linux
     payload = {
         "exp": expiration_time,
         "iat": int(time.time()),
-        "sun": getattr(settings, 'SLURM_REST_USER', 'root'),
-        "uid": int(getattr(settings, 'SLURM_REST_UID', 0)),
-        "gid": int(getattr(settings, 'SLURM_REST_GID', 0)),
+        "sun": getattr(settings, 'SLURM_REST_USER', 'ec2-user'),
+        "uid": int(getattr(settings, 'SLURM_REST_UID', 1000)),
+        "gid": int(getattr(settings, 'SLURM_REST_GID', 1000)),
+        "gecos": "Slurm User",
+        "dir": "/home/ec2-user",
+        "shell": "/bin/bash",
         "id": {
             "gecos": "Slurm User",
-            "dir": "/root",
-            "gids": [int(getattr(settings, 'SLURM_REST_GID', 0))],
+            "dir": "/home/ec2-user",
+            "gids": [int(getattr(settings, 'SLURM_REST_GID', 1000))],
             "shell": "/bin/bash"
         }
     }
