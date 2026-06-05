@@ -14,7 +14,7 @@ from calibration.models.hindcast_run import HindcastRun
 from calibration.run_util.run_common import set_job_status, run_generic_job_end_callback, finalize_calibration_after_callback, \
     finalize_validation_after_callback, finalize_forecast_after_callback, finalize_cold_start_after_callback, finalize_verification_after_callback, \
     finalize_hindcast_after_callback
-from calibration.run_util.slurm_client import get_slurm_session
+from calibration.run_util.slurm_client import get_slurm_session, generate_slurm_jwt
 from calibration.views.common import get_job_description
 
 logger = logging.getLogger(__name__)
@@ -52,7 +52,8 @@ def submit_job_to_slurm(run: BaseRun, owner: User, arguments: dict[str, str], st
     # In a real environment, we would also include JWT or munge auth headers
     headers = {
         "Content-Type": "application/json",
-        "X-SLURM-USER-NAME": owner.username
+        "X-SLURM-USER-NAME": owner.username,
+        "X-SLURM-USER-TOKEN": generate_slurm_jwt()
     }
     
     session = get_slurm_session()
@@ -115,7 +116,9 @@ def cancel_slurm_job(run: BaseRun) -> bool:
     url = urljoin(settings.SLURM_URL, f"/slurm/v0.0.39/job/{run.slurm_job_id}")
     
     headers = {
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "X-SLURM-USER-NAME": getattr(settings, 'SLURM_REST_USER', 'root'),
+        "X-SLURM-USER-TOKEN": generate_slurm_jwt()
     }
     
     session = get_slurm_session()

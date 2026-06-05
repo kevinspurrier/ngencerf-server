@@ -1,5 +1,6 @@
 import os
-import base64
+import time
+import jwt
 import boto3
 import requests
 from requests.auth import AuthBase
@@ -35,12 +36,10 @@ def get_slurm_jwt_secret() -> str | bytes:
         if not secret_string:
             raise ValueError("SecretString not found in SLURM_JWT_SECRET_ARN response")
 
-        try:
-            # The Munge key is base64 encoded by AWS PCS, so decode it to get the raw bytes
-            _SLURM_JWT_SECRET = base64.b64decode(secret_string)
-        except Exception:
-            # Fallback if it wasn't actually base64 encoded
-            _SLURM_JWT_SECRET = secret_string
+        # AWS PCS stores the key in Secrets Manager. 
+        # The slurm auth/jwt plugin reads the file exactly as it is (as a base64 string).
+        # Therefore, we MUST NOT base64-decode it! We must hash against the literal base64 string.
+        _SLURM_JWT_SECRET = secret_string
     else:
         # Fallback for local Docker testing
         _SLURM_JWT_SECRET = os.getenv("SLURM_JWT_SECRET")
@@ -81,3 +80,30 @@ def get_slurm_session() -> requests.Session:
         session.auth = Boto3SigV4Auth()
         
     return session
+
+def generate_slurm_jwt() -> str:
+    """
+    Generates a short-lived JSON Web Token (JWT) using the symmetric 
+    HS256 secret configured for the AWS PCS Slurm REST API.
+    """
+    secret = get_slurm_jwt_secret()
+
+    # The token is valid for 10 minutes
+    expiration_time = int(time.time() + 600)
+
+    # AWS PCS slurmrestd expects the 'root' user unless explicitly configured otherwise
+    payload = {
+        "exp": expiration_time,
+        "iat": int(time.time()),
+        "sun": getattr(settings, 'SLURM_REST_USER', 'root'),
+        "uid": int(getattr(settings, 'SLURM_REST_UID', 0)),
+        "gid": int(getattr(settings, 'SLURM_REST_GID', 0)),
+        "id": {
+            "gecos": "Slurm User",
+            "dir": "/root",
+            "gids": [int(getattr(settings, 'SLURM_REST_GID', 0))],
+            "shell": "/bin/bash"
+        }
+    }
+    
+    return jwt.encode(payload, secret, algorithm="HS256")

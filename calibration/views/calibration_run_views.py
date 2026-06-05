@@ -22,7 +22,7 @@ from calibration.models import Iteration, ValidationRun, ForecastRun, Calibratio
 from calibration.models.base_run import BaseRun
 from calibration.models.hindcast_run import HindcastRun
 from calibration.run_util.run_common import cancel_job_common, submit_job
-from calibration.run_util.slurm_client import get_slurm_jwt_secret, get_slurm_session
+from calibration.run_util.slurm_client import get_slurm_jwt_secret, get_slurm_session, generate_slurm_jwt
 from calibration.run_util.run_ngen_cal_pw import SlurmCallbackStatusEnum, run_calibration_job_callback_pw, run_validation_job_callback_pw, \
     run_forecast_job_callback_pw, run_cold_start_job_callback_pw, run_verification_job_callback_pw, run_hindcast_job_callback_pw
 from calibration.util.calibration_validators import CalibrationRunIdSerializer, GenericResponseSerializer, \
@@ -1837,32 +1837,6 @@ def get_slurm_status(slurm_id: int) -> tuple[bool, str | None]:
         # Safest assumption: job is gone, status indeterminate
         return False, "UNKNOWN"
 
-def generate_slurm_jwt() -> str:
-    """
-    Generates a short-lived JSON Web Token (JWT) using the symmetric 
-    HS256 secret configured for the AWS PCS Slurm REST API.
-    """
-    secret = get_slurm_jwt_secret()
-
-    # The token is valid for 10 minutes
-    expiration_time = int(time.time() + 600)
-
-    # AWS PCS slurmrestd expects the 'root' user unless explicitly configured otherwise
-    payload = {
-        "exp": expiration_time,
-        "iat": int(time.time()),
-        "sun": getattr(settings, 'SLURM_REST_USER', 'root'),
-        "uid": int(getattr(settings, 'SLURM_REST_UID', 0)),
-        "gid": int(getattr(settings, 'SLURM_REST_GID', 0)),
-        "id": {
-            "gecos": "Slurm User",
-            "dir": "/root",
-            "gids": [int(getattr(settings, 'SLURM_REST_GID', 0))],
-            "shell": "/bin/bash"
-        }
-    }
-    
-    return jwt.encode(payload, secret, algorithm="HS256")
 
 @extend_schema(
     request=EmptySerializer,
@@ -1889,6 +1863,8 @@ def submit_poc_job(request: Request) -> Response:
 
     url = f"{settings.SLURM_URL.rstrip('/')}/{settings.SLURM_OPENAPI_SUBMIT_ENDPOINT.lstrip('/')}"
     headers = {
+        "X-SLURM-USER-NAME": getattr(settings, 'SLURM_REST_USER', 'root'),
+        "X-SLURM-USER-TOKEN": token,
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
     }
