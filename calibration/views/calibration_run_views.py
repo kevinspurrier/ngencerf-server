@@ -1872,8 +1872,9 @@ def submit_poc_job(request: Request) -> Response:
         "job": {
             "name": "poc-job",
             "partition": "compute-opt",
-            "nodes": 1,
+            "nodes": "1",
             "tasks": 1,
+            "current_working_directory": "/tmp",
             "script": "#!/bin/bash\necho 'Hello from Slurm REST API Native Integration!'\nsleep 30",
             "environment": ["PATH=/usr/local/bin:/usr/bin:/bin"]
         }

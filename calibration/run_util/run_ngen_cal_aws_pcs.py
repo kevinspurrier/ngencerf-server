@@ -41,9 +41,10 @@ def submit_job_to_slurm(run: BaseRun, owner: User, arguments: dict[str, str], st
         "job": {
             "name": f"ngencerf-{run.id}",
             "tasks": int(arguments.get('nprocs', 1)),
-            "environment": {
-                "NGEN_CAL_DATA_PATH": "/ngencerf/data"
-            }
+            "current_working_directory": "/tmp",
+            "environment": [
+                "NGEN_CAL_DATA_PATH=/ngencerf/data"
+            ]
         }
     }
 
