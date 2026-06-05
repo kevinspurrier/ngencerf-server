@@ -3,6 +3,7 @@ import logging
 from urllib.parse import urljoin
 
 import requests
+from calibration.run_util.slurm_client import get_slurm_session
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from rest_framework import status
@@ -105,7 +106,8 @@ def submit_job_to_slurm(run: BaseRun, owner: User, arguments: dict[str, str], st
     job_description = get_job_description(run)
 
     logger.info(f"Submitting Slurm job for {job_description} to {url} with payload: {payload}")
-    response = requests.post(url, files=payload)
+    session = get_slurm_session()
+    response = session.post(url, files=payload)
     handle_slurm_http_error(response, url, run.id)
 
     logger.info(f"Slurm response from {url_endpoint} for {job_description}: {response.json()}")
@@ -210,7 +212,8 @@ def cancel_slurm_job(run: BaseRun) -> bool:
     payload = {'slurm_job_id': (None, str(run.slurm_job_id))}
 
     logger.info(f'Slurm cancel-job payload to {url}: {payload}')
-    response = requests.post(url, files=payload)
+    session = get_slurm_session()
+    response = session.post(url, files=payload)
     try:
         response.raise_for_status()
     except requests.exceptions.HTTPError as e:

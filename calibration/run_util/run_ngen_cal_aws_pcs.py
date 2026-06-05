@@ -14,6 +14,7 @@ from calibration.models.hindcast_run import HindcastRun
 from calibration.run_util.run_common import set_job_status, run_generic_job_end_callback, finalize_calibration_after_callback, \
     finalize_validation_after_callback, finalize_forecast_after_callback, finalize_cold_start_after_callback, finalize_verification_after_callback, \
     finalize_hindcast_after_callback
+from calibration.run_util.slurm_client import get_slurm_session
 from calibration.views.common import get_job_description
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,8 @@ def submit_job_to_slurm(run: BaseRun, owner: User, arguments: dict[str, str], st
         "X-SLURM-USER-NAME": owner.username
     }
     
-    response = requests.post(url, json=payload, headers=headers)
+    session = get_slurm_session()
+    response = session.post(url, json=payload, headers=headers)
     response.raise_for_status()
 
     slurm_response = response.json()
@@ -116,7 +118,8 @@ def cancel_slurm_job(run: BaseRun) -> bool:
         "Content-Type": "application/json"
     }
     
-    response = requests.delete(url, headers=headers)
+    session = get_slurm_session()
+    response = session.delete(url, headers=headers)
     
     if response.status_code == status.HTTP_404_NOT_FOUND:
         return False

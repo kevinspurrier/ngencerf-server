@@ -22,6 +22,7 @@ from calibration.models import Iteration, ValidationRun, ForecastRun, Calibratio
 from calibration.models.base_run import BaseRun
 from calibration.models.hindcast_run import HindcastRun
 from calibration.run_util.run_common import cancel_job_common, submit_job
+from calibration.run_util.slurm_client import get_slurm_jwt_secret, get_slurm_session
 from calibration.run_util.run_ngen_cal_pw import SlurmCallbackStatusEnum, run_calibration_job_callback_pw, run_validation_job_callback_pw, \
     run_forecast_job_callback_pw, run_cold_start_job_callback_pw, run_verification_job_callback_pw, run_hindcast_job_callback_pw
 from calibration.util.calibration_validators import CalibrationRunIdSerializer, GenericResponseSerializer, \
@@ -1787,7 +1788,8 @@ def get_slurm_status(slurm_id: int) -> tuple[bool, str | None]:
     url = f"{base_url}?slurm_job_id={slurm_id}"
 
     try:
-        resp = requests.get(url, timeout=10)
+        session = get_slurm_session()
+        resp = session.get(url, timeout=10)
 
         # Non-200 HTTP responses (including 404) are treated as unknown
         if resp.status_code != 200:
@@ -1840,23 +1842,22 @@ def generate_slurm_jwt() -> str:
     Generates a short-lived JSON Web Token (JWT) using the symmetric 
     HS256 secret configured for the AWS PCS Slurm REST API.
     """
-    secret = getattr(settings, 'SLURM_JWT_SECRET', None)
-    if not secret:
-        raise ValueError("SLURM_JWT_SECRET is not configured in settings")
+    secret = get_slurm_jwt_secret()
 
     # The token is valid for 10 minutes
     expiration_time = int(time.time() + 600)
 
+    # AWS PCS slurmrestd expects the 'root' user unless explicitly configured otherwise
     payload = {
         "exp": expiration_time,
         "iat": int(time.time()),
-        "sun": "ec2-user",
-        "uid": 1000,
-        "gid": 1000,
+        "sun": getattr(settings, 'SLURM_REST_USER', 'root'),
+        "uid": int(getattr(settings, 'SLURM_REST_UID', 0)),
+        "gid": int(getattr(settings, 'SLURM_REST_GID', 0)),
         "id": {
-            "gecos": "EC2 User",
-            "dir": "/home/ec2-user",
-            "gids": [1000],
+            "gecos": "Slurm User",
+            "dir": "/root",
+            "gids": [int(getattr(settings, 'SLURM_REST_GID', 0))],
             "shell": "/bin/bash"
         }
     }
@@ -1905,7 +1906,8 @@ def submit_poc_job(request: Request) -> Response:
 
     logger.info(f"Submitting PoC job to {url}")
     try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=10)
+        session = get_slurm_session()
+        resp = session.post(url, headers=headers, json=payload, timeout=10)
         resp.raise_for_status()
         data = resp.json()
         logger.info(f"PoC job submitted successfully: {data}")
