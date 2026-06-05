@@ -1,5 +1,6 @@
 import os
 import time
+import base64
 import jwt
 import boto3
 import requests
@@ -36,10 +37,13 @@ def get_slurm_jwt_secret() -> str | bytes:
         if not secret_string:
             raise ValueError("SecretString not found in SLURM_JWT_SECRET_ARN response")
 
-        # AWS PCS stores the key in Secrets Manager. 
-        # The slurm auth/jwt plugin reads the file exactly as it is (as a base64 string).
-        # Therefore, we MUST NOT base64-decode it! We must hash against the literal base64 string.
-        _SLURM_JWT_SECRET = secret_string
+        try:
+            # The Munge key is base64 encoded by AWS PCS, so decode it to get the raw bytes
+            # slurm/auth_jwt plugin uses the raw binary bytes of the key
+            _SLURM_JWT_SECRET = base64.b64decode(secret_string)
+        except Exception:
+            # Fallback if it wasn't actually base64 encoded
+            _SLURM_JWT_SECRET = secret_string
     else:
         # Fallback for local Docker testing
         _SLURM_JWT_SECRET = os.getenv("SLURM_JWT_SECRET")
